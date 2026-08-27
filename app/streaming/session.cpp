@@ -2201,9 +2201,17 @@ void Session::exec()
                 int displayHz = StreamUtils::getDisplayRefreshRate(m_Window);
                 bool enableVsync = m_Preferences->enableVsync;
                 if (displayHz + 5 < m_StreamConfig.fps) {
-                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                                "Disabling V-sync because refresh rate limit exceeded");
-                    enableVsync = false;
+                    if (m_Preferences->framePacing) {
+                        // The user has opted into frame pacing, so keep V-sync on and let
+                        // the pacer/renderer drop excess frames rather than tearing.
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Keeping V-sync despite refresh rate limit exceeded because frame pacing is enabled");
+                    }
+                    else {
+                        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Disabling V-sync because refresh rate limit exceeded");
+                        enableVsync = false;
+                    }
                 }
 
                 // Choose a new decoder (hopefully the same one, but possibly

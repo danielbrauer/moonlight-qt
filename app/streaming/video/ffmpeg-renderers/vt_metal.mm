@@ -814,6 +814,10 @@ public:
                 return;
             }
 
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Starting CAMetalDisplayLink for vsync-paced presentation (%.0f-%.0f FPS)",
+                        m_FrameRateRange.minimum, m_FrameRateRange.maximum);
+
             m_MetalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:m_MetalLayer];
             m_MetalDisplayLink.preferredFrameLatency = 1.0f;
             m_MetalDisplayLink.preferredFrameRateRange = m_FrameRateRange;
