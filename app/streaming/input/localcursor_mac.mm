@@ -95,18 +95,10 @@ enum class NativeCursorKind {
     NotAllowed,
     ColumnResize,     // divider between columns
     RowResize,        // divider between rows
-    FrameResizeEW,    // frame edge, both directions
+    FrameResizeEW,    // frame edge
     FrameResizeNS,
-    FrameResizeE,     // frame edge, one direction
-    FrameResizeW,
-    FrameResizeN,
-    FrameResizeS,
-    FrameResizeNWSE,  // frame corner, both directions
+    FrameResizeNWSE,  // frame corner
     FrameResizeNESW,
-    FrameResizeNW,    // frame corner, one direction
-    FrameResizeSE,
-    FrameResizeNE,
-    FrameResizeSW,
     ContextualMenu,
     DragCopy,
     DragLink,
@@ -170,45 +162,43 @@ static const NamedCursorEntry k_NamedCursors[] = {
     { "row-resize", NativeCursorKind::RowResize },
     { "split_v", NativeCursorKind::RowResize },
 
-    // Frame edges, both directions
+    // Frame edges. The single-direction CSS names (e-resize, ...) only identify
+    // the edge on Linux; they do not mean the window can only grow, so they get
+    // the same double-headed cursor as the bidirectional names.
     { "ew-resize", NativeCursorKind::FrameResizeEW },
+    { "e-resize", NativeCursorKind::FrameResizeEW },
+    { "w-resize", NativeCursorKind::FrameResizeEW },
     { "sb_h_double_arrow", NativeCursorKind::FrameResizeEW },
     { "h_double_arrow", NativeCursorKind::FrameResizeEW },
     { "size_hor", NativeCursorKind::FrameResizeEW },
+    { "right_side", NativeCursorKind::FrameResizeEW },
+    { "right_arrow", NativeCursorKind::FrameResizeEW },
+    { "left_side", NativeCursorKind::FrameResizeEW },
+    { "left_arrow", NativeCursorKind::FrameResizeEW },
     { "ns-resize", NativeCursorKind::FrameResizeNS },
+    { "n-resize", NativeCursorKind::FrameResizeNS },
+    { "s-resize", NativeCursorKind::FrameResizeNS },
     { "sb_v_double_arrow", NativeCursorKind::FrameResizeNS },
     { "v_double_arrow", NativeCursorKind::FrameResizeNS },
     { "size_ver", NativeCursorKind::FrameResizeNS },
+    { "top_side", NativeCursorKind::FrameResizeNS },
+    { "up_arrow", NativeCursorKind::FrameResizeNS },
+    { "bottom_side", NativeCursorKind::FrameResizeNS },
+    { "down_arrow", NativeCursorKind::FrameResizeNS },
 
-    // Frame edges, one direction
-    { "e-resize", NativeCursorKind::FrameResizeE },
-    { "right_side", NativeCursorKind::FrameResizeE },
-    { "right_arrow", NativeCursorKind::FrameResizeE },
-    { "w-resize", NativeCursorKind::FrameResizeW },
-    { "left_side", NativeCursorKind::FrameResizeW },
-    { "left_arrow", NativeCursorKind::FrameResizeW },
-    { "n-resize", NativeCursorKind::FrameResizeN },
-    { "top_side", NativeCursorKind::FrameResizeN },
-    { "up_arrow", NativeCursorKind::FrameResizeN },
-    { "s-resize", NativeCursorKind::FrameResizeS },
-    { "bottom_side", NativeCursorKind::FrameResizeS },
-    { "down_arrow", NativeCursorKind::FrameResizeS },
-
-    // Frame corners, both directions
+    // Frame corners (same reasoning as above)
     { "nwse-resize", NativeCursorKind::FrameResizeNWSE },
+    { "nw-resize", NativeCursorKind::FrameResizeNWSE },
+    { "se-resize", NativeCursorKind::FrameResizeNWSE },
     { "size_fdiag", NativeCursorKind::FrameResizeNWSE },
+    { "top_left_corner", NativeCursorKind::FrameResizeNWSE },
+    { "bottom_right_corner", NativeCursorKind::FrameResizeNWSE },
     { "nesw-resize", NativeCursorKind::FrameResizeNESW },
+    { "ne-resize", NativeCursorKind::FrameResizeNESW },
+    { "sw-resize", NativeCursorKind::FrameResizeNESW },
     { "size_bdiag", NativeCursorKind::FrameResizeNESW },
-
-    // Frame corners, one direction
-    { "nw-resize", NativeCursorKind::FrameResizeNW },
-    { "top_left_corner", NativeCursorKind::FrameResizeNW },
-    { "se-resize", NativeCursorKind::FrameResizeSE },
-    { "bottom_right_corner", NativeCursorKind::FrameResizeSE },
-    { "ne-resize", NativeCursorKind::FrameResizeNE },
-    { "top_right_corner", NativeCursorKind::FrameResizeNE },
-    { "sw-resize", NativeCursorKind::FrameResizeSW },
-    { "bottom_left_corner", NativeCursorKind::FrameResizeSW },
+    { "top_right_corner", NativeCursorKind::FrameResizeNESW },
+    { "bottom_left_corner", NativeCursorKind::FrameResizeNESW },
 
     { "context-menu", NativeCursorKind::ContextualMenu },
 
@@ -250,16 +240,8 @@ static const char* kindName(NativeCursorKind kind)
     case NativeCursorKind::RowResize: return "rowResizeCursor(all)";
     case NativeCursorKind::FrameResizeEW: return "frameResizeCursor(Left, all)";
     case NativeCursorKind::FrameResizeNS: return "frameResizeCursor(Top, all)";
-    case NativeCursorKind::FrameResizeE: return "frameResizeCursor(Right, outward)";
-    case NativeCursorKind::FrameResizeW: return "frameResizeCursor(Left, outward)";
-    case NativeCursorKind::FrameResizeN: return "frameResizeCursor(Top, outward)";
-    case NativeCursorKind::FrameResizeS: return "frameResizeCursor(Bottom, outward)";
     case NativeCursorKind::FrameResizeNWSE: return "frameResizeCursor(TopLeft, all)";
     case NativeCursorKind::FrameResizeNESW: return "frameResizeCursor(TopRight, all)";
-    case NativeCursorKind::FrameResizeNW: return "frameResizeCursor(TopLeft, outward)";
-    case NativeCursorKind::FrameResizeSE: return "frameResizeCursor(BottomRight, outward)";
-    case NativeCursorKind::FrameResizeNE: return "frameResizeCursor(TopRight, outward)";
-    case NativeCursorKind::FrameResizeSW: return "frameResizeCursor(BottomLeft, outward)";
     case NativeCursorKind::ContextualMenu: return "contextualMenuCursor";
     case NativeCursorKind::DragCopy: return "dragCopyCursor";
     case NativeCursorKind::DragLink: return "dragLinkCursor";
@@ -478,24 +460,16 @@ private:
             break;
         case NativeCursorKind::ColumnResize:
         case NativeCursorKind::FrameResizeEW:
-        case NativeCursorKind::FrameResizeE:
-        case NativeCursorKind::FrameResizeW:
             id = SDL_SYSTEM_CURSOR_SIZEWE; name = "SDL_SYSTEM_CURSOR_SIZEWE";
             break;
         case NativeCursorKind::RowResize:
         case NativeCursorKind::FrameResizeNS:
-        case NativeCursorKind::FrameResizeN:
-        case NativeCursorKind::FrameResizeS:
             id = SDL_SYSTEM_CURSOR_SIZENS; name = "SDL_SYSTEM_CURSOR_SIZENS";
             break;
         case NativeCursorKind::FrameResizeNWSE:
-        case NativeCursorKind::FrameResizeNW:
-        case NativeCursorKind::FrameResizeSE:
             id = SDL_SYSTEM_CURSOR_SIZENWSE; name = "SDL_SYSTEM_CURSOR_SIZENWSE";
             break;
         case NativeCursorKind::FrameResizeNESW:
-        case NativeCursorKind::FrameResizeNE:
-        case NativeCursorKind::FrameResizeSW:
             id = SDL_SYSTEM_CURSOR_SIZENESW; name = "SDL_SYSTEM_CURSOR_SIZENESW";
             break;
         default:
@@ -605,26 +579,10 @@ private:
             return frameResizeCursor(NSCursorFrameResizePositionLeft, NSCursorFrameResizeDirectionsAll);
         case NativeCursorKind::FrameResizeNS:
             return frameResizeCursor(NSCursorFrameResizePositionTop, NSCursorFrameResizeDirectionsAll);
-        case NativeCursorKind::FrameResizeE:
-            return frameResizeCursor(NSCursorFrameResizePositionRight, NSCursorFrameResizeDirectionsOutward);
-        case NativeCursorKind::FrameResizeW:
-            return frameResizeCursor(NSCursorFrameResizePositionLeft, NSCursorFrameResizeDirectionsOutward);
-        case NativeCursorKind::FrameResizeN:
-            return frameResizeCursor(NSCursorFrameResizePositionTop, NSCursorFrameResizeDirectionsOutward);
-        case NativeCursorKind::FrameResizeS:
-            return frameResizeCursor(NSCursorFrameResizePositionBottom, NSCursorFrameResizeDirectionsOutward);
         case NativeCursorKind::FrameResizeNWSE:
             return frameResizeCursor(NSCursorFrameResizePositionTopLeft, NSCursorFrameResizeDirectionsAll);
         case NativeCursorKind::FrameResizeNESW:
             return frameResizeCursor(NSCursorFrameResizePositionTopRight, NSCursorFrameResizeDirectionsAll);
-        case NativeCursorKind::FrameResizeNW:
-            return frameResizeCursor(NSCursorFrameResizePositionTopLeft, NSCursorFrameResizeDirectionsOutward);
-        case NativeCursorKind::FrameResizeSE:
-            return frameResizeCursor(NSCursorFrameResizePositionBottomRight, NSCursorFrameResizeDirectionsOutward);
-        case NativeCursorKind::FrameResizeNE:
-            return frameResizeCursor(NSCursorFrameResizePositionTopRight, NSCursorFrameResizeDirectionsOutward);
-        case NativeCursorKind::FrameResizeSW:
-            return frameResizeCursor(NSCursorFrameResizePositionBottomLeft, NSCursorFrameResizeDirectionsOutward);
         case NativeCursorKind::ContextualMenu:
             return [NSCursor contextualMenuCursor];
         case NativeCursorKind::DragCopy:
