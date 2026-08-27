@@ -8,8 +8,9 @@
 #include <QtGlobal>
 #include <QDir>
 #include <QGuiApplication>
+#include <QSettings>
 
-SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight)
+SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, const QString& hostUuid, int streamWidth, int streamHeight)
     : m_MultiController(prefs.multiController),
       m_GamepadMouse(prefs.gamepadMouse),
       m_SwapMouseButtons(prefs.swapMouseButtons),
@@ -23,6 +24,7 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_KeyboardCaptureActive(false),
       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
+      m_HostUuid(hostUuid),
       m_LongPressTimer(0),
       m_StreamWidth(streamWidth),
       m_StreamHeight(streamHeight),
@@ -38,6 +40,17 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     // System keys are always captured when running without a DE
     if (!WMUtils::isRunningDesktopEnvironment()) {
         m_CaptureSystemKeysMode = StreamingPreferences::CSK_ALWAYS;
+    }
+
+    // Restore the local cursor visibility state last chosen for this host
+    // via the toggle cursor combo (only applicable in absolute mouse mode)
+    if (!m_HostUuid.isEmpty()) {
+        QSettings settings;
+        settings.beginGroup("cursorvisibility");
+        if (settings.value(m_HostUuid, false).toBool()) {
+            m_MouseCursorCapturedVisibilityState = SDL_ENABLE;
+        }
+        settings.endGroup();
     }
 
     // SDL3 breaks our auto-capture-on-leave logic because the mouse focus has already
@@ -263,6 +276,18 @@ SdlInputHandler::~SdlInputHandler()
     // video backends.
     SDL_ShowCursor(SDL_DISABLE);
 #endif
+}
+
+void SdlInputHandler::saveCursorVisibilityState()
+{
+    if (m_HostUuid.isEmpty()) {
+        return;
+    }
+
+    QSettings settings;
+    settings.beginGroup("cursorvisibility");
+    settings.setValue(m_HostUuid, m_MouseCursorCapturedVisibilityState == SDL_ENABLE);
+    settings.endGroup();
 }
 
 void SdlInputHandler::setWindow(SDL_Window *window)

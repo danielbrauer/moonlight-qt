@@ -84,11 +84,13 @@ struct DualSenseOutputReport{
 class SdlInputHandler
 {
 public:
-    explicit SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight);
+    explicit SdlInputHandler(StreamingPreferences& prefs, const QString& hostUuid, int streamWidth, int streamHeight);
 
     ~SdlInputHandler();
 
     void setWindow(SDL_Window* window);
+
+    void saveCursorVisibilityState();
 
     void handleKeyEvent(SDL_KeyboardEvent* event);
 
@@ -226,6 +228,7 @@ private:
     QStringList m_IgnoreDeviceGuids;
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
     int m_MouseCursorCapturedVisibilityState;
+    QString m_HostUuid;
 
     struct {
         KeyCombo keyCombo;
