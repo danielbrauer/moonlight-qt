@@ -1,12 +1,17 @@
 #include "localcursor.h"
 
 #include "SDL_compat.h"
+#include "path.h"
 #include <Limelight.h>
 
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QHash>
+#include <QList>
 #include <QSet>
 #include <QtGlobal>
 
@@ -101,6 +106,7 @@ enum class NativeCursorKind {
     DragLink,
     ZoomIn,
     ZoomOut,
+    Raster,
 };
 
 struct NamedCursorEntry {
@@ -220,6 +226,75 @@ static const NamedCursorEntry k_NamedCursors[] = {
     { "none", NativeCursorKind::Hidden },
 };
 
+static const char* kindName(NativeCursorKind kind)
+{
+    switch (kind) {
+    case NativeCursorKind::Hidden: return "(hidden)";
+    case NativeCursorKind::Arrow: return "arrowCursor";
+    case NativeCursorKind::IBeam: return "IBeamCursor";
+    case NativeCursorKind::IBeamVertical: return "IBeamCursorForVerticalLayout";
+    case NativeCursorKind::PointingHand: return "pointingHandCursor";
+    case NativeCursorKind::OpenHand: return "openHandCursor";
+    case NativeCursorKind::ClosedHand: return "closedHandCursor";
+    case NativeCursorKind::Crosshair: return "crosshairCursor";
+    case NativeCursorKind::NotAllowed: return "operationNotAllowedCursor";
+    case NativeCursorKind::ResizeLeftRight: return "resizeLeftRightCursor";
+    case NativeCursorKind::ResizeUpDown: return "resizeUpDownCursor";
+    case NativeCursorKind::ResizeLeft: return "resizeLeftCursor";
+    case NativeCursorKind::ResizeRight: return "resizeRightCursor";
+    case NativeCursorKind::ResizeUp: return "resizeUpCursor";
+    case NativeCursorKind::ResizeDown: return "resizeDownCursor";
+    case NativeCursorKind::ResizeNwSe: return "frameResizeCursor(TopLeft, all)";
+    case NativeCursorKind::ResizeNeSw: return "frameResizeCursor(TopRight, all)";
+    case NativeCursorKind::ContextualMenu: return "contextualMenuCursor";
+    case NativeCursorKind::DragCopy: return "dragCopyCursor";
+    case NativeCursorKind::DragLink: return "dragLinkCursor";
+    case NativeCursorKind::ZoomIn: return "zoomInCursor";
+    case NativeCursorKind::ZoomOut: return "zoomOutCursor";
+    case NativeCursorKind::Raster: return "NSCursor from host raster";
+    }
+    return "?";
+}
+
+static const char* formatName(uint8_t format)
+{
+    switch (format) {
+    case LI_CURSOR_FORMAT_HIDDEN: return "HIDDEN";
+    case LI_CURSOR_FORMAT_NAMED: return "NAMED";
+    case LI_CURSOR_FORMAT_ARGB: return "ARGB";
+    case LI_CURSOR_FORMAT_SVG: return "SVG";
+    default: return "?";
+    }
+}
+
+// How a host shape was resolved, for logging and the debug report
+struct ShapeResolution {
+    SDL_Cursor* cursor = nullptr;
+    NSCursor* nsCursor = nil;          // The NSCursor shown (nil for SDL fallbacks or hidden)
+    NativeCursorKind kind = NativeCursorKind::Hidden;
+    QString mechanism;                 // How the cursor was produced
+    QString note;                      // Anything unusual (unknown name, fallback, ...)
+    CGFloat targetWidth = 0;           // Raster only: displayed size in points
+    CGFloat targetHeight = 0;
+};
+
+// One row of the debug report: a distinct host shape and what it became
+struct CursorReportEntry {
+    CursorShapeMessage msg;
+    QByteArray hostPng;
+    QByteArray macPng;
+    NSSize macImageSize = {0, 0};
+    NSPoint macHotSpot = {0, 0};
+    QString macCursor;
+    QString mechanism;
+    QString note;
+    CGFloat targetWidth = 0;
+    CGFloat targetHeight = 0;
+    float pointerScale = 1.0f;
+    int count = 0;
+    qint64 firstSeenMs = 0;
+};
+
 class LocalCursorPrivate
 {
 public:
@@ -228,12 +303,15 @@ public:
           m_UseHostShape(true),
           m_NativeWrappingUnavailable(false),
           m_CurrentCursor(nullptr),
-          m_RasterPointerScale(0.0f)
+          m_RasterPointerScale(0.0f),
+          m_SessionStartMs(QDateTime::currentMSecsSinceEpoch())
     {
     }
 
     ~LocalCursorPrivate()
     {
+        writeReport();
+
         // Make sure SDL isn't referencing one of our cursors before freeing them
         SDL_SetCursor(SDL_GetDefaultCursor());
         m_CurrentCursor = nullptr;
@@ -246,24 +324,26 @@ public:
 
     bool applyShape(const CursorShapeMessage& msg)
     {
-        SDL_Cursor* cursor = nullptr;
+        ShapeResolution res;
 
         switch (msg.format) {
         case LI_CURSOR_FORMAT_HIDDEN:
+            res.mechanism = "hidden";
             break;
 
         case LI_CURSOR_FORMAT_NAMED:
-            cursor = cursorForName(msg.name);
+            resolveName(msg.name, res);
             break;
 
         case LI_CURSOR_FORMAT_ARGB:
-            cursor = cursorForRaster(msg);
-            if (cursor == nullptr) {
+            resolveRaster(msg, res);
+            if (res.cursor == nullptr) {
                 // The host is not compositing a cursor, so show something
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                             "Unable to create cursor from %ux%u raster (%s). Falling back to arrow.",
                             msg.width, msg.height, qPrintable(msg.name));
-                cursor = cursorForKind(NativeCursorKind::Arrow);
+                res.note = "invalid raster; fell back to arrow";
+                resolveKind(NativeCursorKind::Arrow, res);
             }
             break;
 
@@ -271,12 +351,15 @@ public:
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Unsupported cursor shape format %u (%s). Falling back to arrow.",
                         msg.format, qPrintable(msg.name));
-            cursor = cursorForKind(NativeCursorKind::Arrow);
+            res.note = QString("unsupported format %1; fell back to arrow").arg(msg.format);
+            resolveKind(NativeCursorKind::Arrow, res);
             break;
         }
 
-        m_CurrentCursor = cursor;
-        m_Active = (cursor != nullptr);
+        recordShape(msg, res);
+
+        m_CurrentCursor = res.cursor;
+        m_Active = (res.cursor != nullptr);
 
         updateSdlCursor();
 
@@ -357,85 +440,104 @@ private:
     }
 
     // Fallback for when we can't wrap NSCursors: the closest SDL system cursor
-    static SDL_Cursor* createSdlSystemCursor(NativeCursorKind kind)
+    static SDL_Cursor* createSdlSystemCursor(NativeCursorKind kind, QString* description)
     {
         SDL_SystemCursor id;
+        const char* name;
         switch (kind) {
         case NativeCursorKind::IBeam:
         case NativeCursorKind::IBeamVertical:
-            id = SDL_SYSTEM_CURSOR_IBEAM;
+            id = SDL_SYSTEM_CURSOR_IBEAM; name = "SDL_SYSTEM_CURSOR_IBEAM";
             break;
         case NativeCursorKind::PointingHand:
-            id = SDL_SYSTEM_CURSOR_HAND;
+            id = SDL_SYSTEM_CURSOR_HAND; name = "SDL_SYSTEM_CURSOR_HAND";
             break;
         case NativeCursorKind::OpenHand:
         case NativeCursorKind::ClosedHand:
-            id = SDL_SYSTEM_CURSOR_SIZEALL;
+            id = SDL_SYSTEM_CURSOR_SIZEALL; name = "SDL_SYSTEM_CURSOR_SIZEALL";
             break;
         case NativeCursorKind::Crosshair:
-            id = SDL_SYSTEM_CURSOR_CROSSHAIR;
+            id = SDL_SYSTEM_CURSOR_CROSSHAIR; name = "SDL_SYSTEM_CURSOR_CROSSHAIR";
             break;
         case NativeCursorKind::NotAllowed:
-            id = SDL_SYSTEM_CURSOR_NO;
+            id = SDL_SYSTEM_CURSOR_NO; name = "SDL_SYSTEM_CURSOR_NO";
             break;
         case NativeCursorKind::ResizeLeftRight:
         case NativeCursorKind::ResizeLeft:
         case NativeCursorKind::ResizeRight:
-            id = SDL_SYSTEM_CURSOR_SIZEWE;
+            id = SDL_SYSTEM_CURSOR_SIZEWE; name = "SDL_SYSTEM_CURSOR_SIZEWE";
             break;
         case NativeCursorKind::ResizeUpDown:
         case NativeCursorKind::ResizeUp:
         case NativeCursorKind::ResizeDown:
-            id = SDL_SYSTEM_CURSOR_SIZENS;
+            id = SDL_SYSTEM_CURSOR_SIZENS; name = "SDL_SYSTEM_CURSOR_SIZENS";
             break;
         case NativeCursorKind::ResizeNwSe:
-            id = SDL_SYSTEM_CURSOR_SIZENWSE;
+            id = SDL_SYSTEM_CURSOR_SIZENWSE; name = "SDL_SYSTEM_CURSOR_SIZENWSE";
             break;
         case NativeCursorKind::ResizeNeSw:
-            id = SDL_SYSTEM_CURSOR_SIZENESW;
+            id = SDL_SYSTEM_CURSOR_SIZENESW; name = "SDL_SYSTEM_CURSOR_SIZENESW";
             break;
         default:
-            id = SDL_SYSTEM_CURSOR_ARROW;
+            id = SDL_SYSTEM_CURSOR_ARROW; name = "SDL_SYSTEM_CURSOR_ARROW";
             break;
         }
+        *description = name;
         return SDL_CreateSystemCursor(id);
     }
 
-    SDL_Cursor* cursorForKind(NativeCursorKind kind)
+    void resolveKind(NativeCursorKind kind, ShapeResolution& res)
     {
+        res.kind = kind;
         if (kind == NativeCursorKind::Hidden) {
-            return nullptr;
+            res.cursor = nullptr;
+            res.mechanism = "hidden";
+            return;
         }
+
+        // The NSCursor is reported even on cache hits so the report can render it
+        res.nsCursor = nativeCursorForKind(kind);
 
         auto it = m_NamedCursors.find((int)kind);
         if (it != m_NamedCursors.end()) {
-            return it.value();
+            res.cursor = it.value();
+            res.mechanism = m_NamedCursorMechanisms.value((int)kind);
+            return;
         }
 
-        NSCursor* nsCursor = nativeCursorForKind(kind);
-        SDL_Cursor* cursor = wrapNativeCursor(nsCursor);
-        if (cursor == nullptr) {
-            cursor = createSdlSystemCursor(kind);
+        SDL_Cursor* cursor = wrapNativeCursor(res.nsCursor);
+        if (cursor != nullptr) {
+            res.mechanism = "native NSCursor";
         }
+        else {
+            QString sdlName;
+            cursor = createSdlSystemCursor(kind, &sdlName);
+            res.mechanism = "SDL system cursor fallback: " + sdlName;
+            res.nsCursor = nil;
+        }
+
         if (cursor != nullptr) {
             m_NamedCursors.insert((int)kind, cursor);
+            m_NamedCursorMechanisms.insert((int)kind, res.mechanism);
         }
-        return cursor;
+        res.cursor = cursor;
     }
 
-    SDL_Cursor* cursorForName(const QString& name)
+    void resolveName(const QString& name, ShapeResolution& res)
     {
         QByteArray utf8 = name.toUtf8();
         for (const NamedCursorEntry& entry : k_NamedCursors) {
             if (utf8 == entry.name) {
-                return cursorForKind(entry.kind);
+                resolveKind(entry.kind, res);
+                return;
             }
         }
 
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "Unknown named cursor '%s'. Falling back to arrow.",
                     utf8.constData());
-        return cursorForKind(NativeCursorKind::Arrow);
+        res.note = "unknown name; fell back to arrow";
+        resolveKind(NativeCursorKind::Arrow, res);
     }
 
     static NSCursor* nativeCursorForKind(NativeCursorKind kind)
@@ -497,6 +599,7 @@ private:
             return [NSCursor arrowCursor];
         case NativeCursorKind::Arrow:
         case NativeCursorKind::Hidden:
+        case NativeCursorKind::Raster:
         default:
             return [NSCursor arrowCursor];
         }
@@ -525,11 +628,26 @@ private:
         return DEFAULT_POINTS_PER_NOMINAL_PIXEL;
     }
 
-    SDL_Cursor* cursorForRaster(const CursorShapeMessage& msg)
+    static QByteArray rasterCacheKey(const CursorShapeMessage& msg)
     {
+        QByteArray key;
+        key.append((const char*)&msg.width, sizeof(msg.width));
+        key.append((const char*)&msg.height, sizeof(msg.height));
+        key.append((const char*)&msg.hotX, sizeof(msg.hotX));
+        key.append((const char*)&msg.hotY, sizeof(msg.hotY));
+        key.append((const char*)&msg.nominalSize, sizeof(msg.nominalSize));
+        size_t dataHash = qHash(msg.data);
+        key.append((const char*)&dataHash, sizeof(dataHash));
+        return key;
+    }
+
+    void resolveRaster(const CursorShapeMessage& msg, ShapeResolution& res)
+    {
+        res.kind = NativeCursorKind::Raster;
+
         if (msg.width == 0 || msg.height == 0 ||
                 msg.data.size() != (int)msg.width * msg.height * 4) {
-            return nullptr;
+            return;
         }
 
         // Custom cursors are scaled by us, so flush the cache if the pointer size changed
@@ -539,19 +657,14 @@ private:
             m_RasterPointerScale = pointerScale;
         }
 
-        // Cache by image content and hotspot
-        QByteArray key;
-        key.append((const char*)&msg.width, sizeof(msg.width));
-        key.append((const char*)&msg.height, sizeof(msg.height));
-        key.append((const char*)&msg.hotX, sizeof(msg.hotX));
-        key.append((const char*)&msg.hotY, sizeof(msg.hotY));
-        key.append((const char*)&msg.nominalSize, sizeof(msg.nominalSize));
-        size_t dataHash = qHash(msg.data);
-        key.append((const char*)&dataHash, sizeof(dataHash));
+        getTargetPointSize(msg, pointerScale, &res.targetWidth, &res.targetHeight);
 
+        QByteArray key = rasterCacheKey(msg);
         auto it = m_RasterCursors.find(key);
         if (it != m_RasterCursors.end()) {
-            return it.value();
+            res.cursor = it.value();
+            res.mechanism = m_RasterCursorMechanisms.value(key);
+            return;
         }
 
         SDL_Cursor* cursor = nullptr;
@@ -559,16 +672,24 @@ private:
             NSCursor* nsCursor = createRasterCursor(msg, pointerScale);
             if (nsCursor != nil) {
                 cursor = wrapNativeCursor(nsCursor);
-                [nsCursor release];
+                if (cursor != nullptr) {
+                    res.nsCursor = [nsCursor autorelease];
+                    res.mechanism = "native NSCursor from host raster";
+                }
+                else {
+                    [nsCursor release];
+                }
             }
         }
         if (cursor == nullptr) {
             cursor = createSdlRasterCursor(msg, pointerScale);
+            res.mechanism = "SDL color cursor fallback (1x)";
         }
         if (cursor != nullptr) {
             m_RasterCursors.insert(key, cursor);
+            m_RasterCursorMechanisms.insert(key, res.mechanism);
         }
-        return cursor;
+        res.cursor = cursor;
     }
 
     // Computes the point size a host raster should be displayed at. The raster
@@ -698,13 +819,250 @@ private:
         return [[NSCursor alloc] initWithImage:image hotSpot:hotSpot];
     }
 
+    // ---- Debug report -----------------------------------------------------
+
+    static QByteArray reportKey(const CursorShapeMessage& msg)
+    {
+        QByteArray key;
+        key.append((char)msg.format);
+        key.append(msg.name.toUtf8());
+        key.append('\0');
+        if (msg.format == LI_CURSOR_FORMAT_ARGB) {
+            key.append(rasterCacheKey(msg));
+        }
+        return key;
+    }
+
+    // Renders an NSImage to PNG at 2x for the report
+    static QByteArray pngFromNSImage(NSImage* image)
+    {
+        if (image == nil || image.size.width <= 0 || image.size.height <= 0) {
+            return QByteArray();
+        }
+
+        const int scale = 2;
+        NSBitmapImageRep* rep = [[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr
+                                                                          pixelsWide:(NSInteger)std::ceil(image.size.width * scale)
+                                                                          pixelsHigh:(NSInteger)std::ceil(image.size.height * scale)
+                                                                       bitsPerSample:8
+                                                                     samplesPerPixel:4
+                                                                            hasAlpha:YES
+                                                                            isPlanar:NO
+                                                                      colorSpaceName:NSDeviceRGBColorSpace
+                                                                         bytesPerRow:0
+                                                                        bitsPerPixel:0] autorelease];
+        if (rep == nil) {
+            return QByteArray();
+        }
+        rep.size = image.size;
+
+        [NSGraphicsContext saveGraphicsState];
+        [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
+        [image drawInRect:NSMakeRect(0, 0, image.size.width, image.size.height)
+                 fromRect:NSZeroRect
+                operation:NSCompositingOperationCopy
+                 fraction:1.0];
+        [NSGraphicsContext restoreGraphicsState];
+
+        NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        return QByteArray((const char*)png.bytes, (int)png.length);
+    }
+
+    static QByteArray pngFromHostRaster(const CursorShapeMessage& msg)
+    {
+        if (msg.format != LI_CURSOR_FORMAT_ARGB || msg.width == 0 || msg.height == 0 ||
+                msg.data.size() != (int)msg.width * msg.height * 4) {
+            return QByteArray();
+        }
+
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+        CGImageRef image = createSourceImage(msg, colorSpace);
+        CGColorSpaceRelease(colorSpace);
+        if (image == nullptr) {
+            return QByteArray();
+        }
+
+        NSBitmapImageRep* rep = [[[NSBitmapImageRep alloc] initWithCGImage:image] autorelease];
+        CGImageRelease(image);
+        NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        return QByteArray((const char*)png.bytes, (int)png.length);
+    }
+
+    void recordShape(const CursorShapeMessage& msg, const ShapeResolution& res)
+    {
+        QByteArray key = reportKey(msg);
+        auto it = m_ReportIndex.find(key);
+        if (it != m_ReportIndex.end()) {
+            m_Report[it.value()].count++;
+            return;
+        }
+
+        CursorReportEntry entry;
+        entry.msg = msg;
+        entry.count = 1;
+        entry.firstSeenMs = QDateTime::currentMSecsSinceEpoch() - m_SessionStartMs;
+        entry.macCursor = res.cursor != nullptr ? kindName(res.kind) : kindName(NativeCursorKind::Hidden);
+        entry.mechanism = res.mechanism;
+        entry.note = res.note;
+        entry.targetWidth = res.targetWidth;
+        entry.targetHeight = res.targetHeight;
+        entry.pointerScale = m_RasterPointerScale != 0.0f ? m_RasterPointerScale : getPointerScale();
+        entry.hostPng = pngFromHostRaster(msg);
+        if (res.nsCursor != nil) {
+            entry.macPng = pngFromNSImage(res.nsCursor.image);
+            entry.macImageSize = res.nsCursor.image.size;
+            entry.macHotSpot = res.nsCursor.hotSpot;
+        }
+
+        m_ReportIndex.insert(key, m_Report.size());
+        m_Report.append(entry);
+    }
+
+    static QString htmlEscape(const QString& s)
+    {
+        return s.toHtmlEscaped();
+    }
+
+    static QString imgTag(const QByteArray& png, double widthPts, double heightPts, const QString& alt)
+    {
+        if (png.isEmpty()) {
+            return "<span class=\"none\">" + alt + "</span>";
+        }
+        QString style;
+        if (widthPts > 0 && heightPts > 0) {
+            style = QString(" style=\"width:%1px;height:%2px\"").arg(widthPts).arg(heightPts);
+        }
+        return QString("<img src=\"data:image/png;base64,%1\"%2 alt=\"%3\">")
+                .arg(QString::fromLatin1(png.toBase64()), style, alt);
+    }
+
+    void writeReport()
+    { @autoreleasepool {
+        if (m_Report.isEmpty()) {
+            return;
+        }
+
+        if (qEnvironmentVariable("LOCAL_CURSOR_REPORT") == "0") {
+            return;
+        }
+
+        QDir logDir(Path::getLogDir());
+        QString path = logDir.filePath(QString("Moonlight-cursors-%1.html").arg(QDateTime::currentSecsSinceEpoch()));
+
+        SDL_version sdlVersion;
+        SDL_GetVersion(&sdlVersion);
+
+        QString html;
+        html += "<!doctype html><html><head><meta charset=\"utf-8\"><title>Moonlight cursor shapes</title>\n";
+        html += "<style>\n"
+                "body{font:14px -apple-system,Helvetica,sans-serif;margin:24px;color:#222;background:#fafafa}\n"
+                "h1{font-size:20px;margin:0 0 4px} .meta{color:#666;margin-bottom:16px}\n"
+                "table{border-collapse:collapse;width:100%;background:#fff}\n"
+                "th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;vertical-align:top}\n"
+                "th{background:#f0f0f0;font-weight:600}\n"
+                "td.img{background:repeating-conic-gradient(#e6e6e6 0 25%,#fff 0 50%) 0 0/16px 16px;text-align:center;vertical-align:middle}\n"
+                "code{font:12px Menlo,monospace;background:#f3f3f3;padding:1px 4px;border-radius:3px}\n"
+                ".none{color:#999;font-style:italic} .note{color:#b3261e} .small{color:#666;font-size:12px}\n"
+                "img{vertical-align:middle;image-rendering:auto}\n"
+                "</style></head><body>\n";
+        html += "<h1>Moonlight cursor shapes</h1>\n";
+        html += QString("<div class=\"meta\">%1 &middot; %2 distinct shape%3 &middot; pointer scale %4 &middot; "
+                        "points per nominal px %5 &middot; SDL %6.%7.%8%9</div>\n")
+                .arg(htmlEscape(QDateTime::currentDateTime().toString(Qt::ISODate)))
+                .arg(m_Report.size())
+                .arg(m_Report.size() == 1 ? "" : "s")
+                .arg(getPointerScale())
+                .arg(getPointsPerNominalPixel())
+                .arg(sdlVersion.major).arg(sdlVersion.minor).arg(sdlVersion.patch)
+                .arg(m_NativeWrappingUnavailable ? " &middot; <span class=\"note\">NSCursor wrapping unavailable; SDL fallbacks in use</span>" : "");
+
+        html += "<table><thead><tr>"
+                "<th>#</th><th>Linux name</th><th>Format</th><th>Host image</th><th>Host details</th>"
+                "<th>Mac cursor</th><th>Mac image (as shown)</th><th>Mac details</th><th>Count</th><th>First seen</th>"
+                "</tr></thead><tbody>\n";
+
+        int row = 0;
+        for (const CursorReportEntry& e : std::as_const(m_Report)) {
+            row++;
+            const CursorShapeMessage& m = e.msg;
+
+            QString hostDetails;
+            if (m.format == LI_CURSOR_FORMAT_ARGB) {
+                hostDetails = QString("%1&times;%2 px, hotspot (%3,%4), nominal %5 px, %6 bytes")
+                        .arg(m.width).arg(m.height).arg(m.hotX).arg(m.hotY).arg(m.nominalSize).arg(m.data.size());
+            }
+            else if (m.format == LI_CURSOR_FORMAT_NAMED) {
+                hostDetails = QString("nominal %1 px").arg(m.nominalSize);
+            }
+
+            QString macDetails;
+            if (!e.mechanism.isEmpty()) {
+                macDetails += htmlEscape(e.mechanism);
+            }
+            if (e.targetWidth > 0) {
+                macDetails += QString("<br>displayed at %1&times;%2 pt (pointer scale %3)")
+                        .arg(e.targetWidth, 0, 'f', 1).arg(e.targetHeight, 0, 'f', 1).arg(e.pointerScale);
+            }
+            if (!e.macPng.isEmpty()) {
+                macDetails += QString("<br><span class=\"small\">image %1&times;%2 pt, hotspot (%3,%4)</span>")
+                        .arg(e.macImageSize.width, 0, 'f', 1).arg(e.macImageSize.height, 0, 'f', 1)
+                        .arg(e.macHotSpot.x, 0, 'f', 1).arg(e.macHotSpot.y, 0, 'f', 1);
+            }
+            if (!e.note.isEmpty()) {
+                macDetails += "<br><span class=\"note\">" + htmlEscape(e.note) + "</span>";
+            }
+
+            // Show the host raster at its native pixel size (1 px = 1 CSS px) and the
+            // Mac image at its point size, so relative sizes are comparable on screen.
+            html += QString("<tr><td>%1</td><td><code>%2</code></td><td>%3</td>"
+                            "<td class=\"img\">%4</td><td>%5</td>"
+                            "<td><code>%6</code></td><td class=\"img\">%7</td><td>%8</td>"
+                            "<td>%9</td><td>%10 s</td></tr>\n")
+                    .arg(row)
+                    .arg(m.name.isEmpty() ? QString("<span class=\"none\">(unnamed)</span>") : htmlEscape(m.name))
+                    .arg(formatName(m.format))
+                    .arg(imgTag(e.hostPng, m.width, m.height, m.format == LI_CURSOR_FORMAT_ARGB ? "host raster" : "&ndash;"))
+                    .arg(hostDetails)
+                    .arg(htmlEscape(e.macCursor))
+                    .arg(imgTag(e.macPng, e.macImageSize.width, e.macImageSize.height, e.mechanism.startsWith("SDL") ? "SDL cursor (no preview)" : "&ndash;"))
+                    .arg(macDetails)
+                    .arg(e.count)
+                    .arg(e.firstSeenMs / 1000.0, 0, 'f', 1);
+        }
+
+        html += "</tbody></table>\n</body></html>\n";
+
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Unable to write cursor shape report to %s",
+                        qPrintable(path));
+            return;
+        }
+        file.write(html.toUtf8());
+        file.close();
+
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Wrote cursor shape report with %d shapes to %s",
+                    (int)m_Report.size(),
+                    qPrintable(path));
+
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path.toNSString()]];
+    }}
+
     bool m_Active;
     bool m_UseHostShape;
     bool m_NativeWrappingUnavailable;
     SDL_Cursor* m_CurrentCursor;
     float m_RasterPointerScale;
     QHash<int, SDL_Cursor*> m_NamedCursors;
+    QHash<int, QString> m_NamedCursorMechanisms;
     QHash<QByteArray, SDL_Cursor*> m_RasterCursors;
+    QHash<QByteArray, QString> m_RasterCursorMechanisms;
+
+    qint64 m_SessionStartMs;
+    QList<CursorReportEntry> m_Report;
+    QHash<QByteArray, int> m_ReportIndex;
 };
 
 LocalCursor::LocalCursor()
@@ -713,9 +1071,9 @@ LocalCursor::LocalCursor()
 }
 
 LocalCursor::~LocalCursor()
-{
+{ @autoreleasepool {
     delete m_Private;
-}
+}}
 
 bool LocalCursor::applyShape(const CursorShapeMessage& msg)
 { @autoreleasepool {
