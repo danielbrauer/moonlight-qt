@@ -105,11 +105,9 @@ int Pacer::vsyncThread(void *context)
 {
     Pacer* me = reinterpret_cast<Pacer*>(context);
 
-#if SDL_VERSION_ATLEAST(2, 0, 9)
-    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_TIME_CRITICAL);
-#else
+// PATCHED: TIME_CRITICAL maps to a Mach real-time thread on macOS, which
+// preempts WindowServer and causes system-wide stutter in other apps.
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
-#endif
 
     bool async = me->m_VsyncSource->isAsync();
     while (!me->m_Stopping) {
