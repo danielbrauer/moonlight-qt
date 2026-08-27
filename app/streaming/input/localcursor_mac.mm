@@ -143,6 +143,7 @@ static const NamedCursorEntry k_NamedCursors[] = {
     { "grabbing", NativeCursorKind::ClosedHand },
     { "closedhand", NativeCursorKind::ClosedHand },
     { "dnd-move", NativeCursorKind::ClosedHand },
+    { "dnd-none", NativeCursorKind::ClosedHand },  // GTK: drag in progress, no action
 
     { "crosshair", NativeCursorKind::Crosshair },
     { "cross", NativeCursorKind::Crosshair },
