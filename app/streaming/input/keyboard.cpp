@@ -78,7 +78,12 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
 
         if (!SDL_GetRelativeMouseMode()) {
             m_MouseCursorCapturedVisibilityState = !m_MouseCursorCapturedVisibilityState;
-            SDL_ShowCursor(m_MouseCursorCapturedVisibilityState);
+            SDL_ShowCursor(getCapturedCursorVisibility());
+
+            if (m_LocalCursor.isActive() && m_MouseCursorCapturedVisibilityState == SDL_DISABLE) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Cursor remains visible because the host is providing cursor shapes");
+            }
 
             // Remember this choice for future sessions with this host
             saveCursorVisibilityState();

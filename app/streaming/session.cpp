@@ -28,6 +28,7 @@
 #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
 #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
 #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
+#define SDL_CODE_SET_CURSOR_SHAPE 106
 
 #include <openssl/rand.h>
 
@@ -60,7 +61,8 @@ CONNECTION_LISTENER_CALLBACKS Session::k_ConnCallbacks = {
     Session::clRumbleTriggers,
     Session::clSetMotionEventState,
     Session::clSetControllerLED,
-    Session::clSetAdaptiveTriggers
+    Session::clSetAdaptiveTriggers,
+    Session::clSetCursorShape
 };
 
 Session* Session::s_ActiveSession;
@@ -272,6 +274,33 @@ void Session::clSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlag
 
     setControllerLEDEvent.user.data2 = (void *) state;
     SDL_PushEvent(&setControllerLEDEvent);
+}
+
+void Session::clSetCursorShape(uint8_t format, const char* name, uint16_t width, uint16_t height, uint16_t hotX, uint16_t hotY,
+                               uint16_t nominalSize, const uint8_t* data, uint32_t dataLength)
+{
+    // Cursor changes must be applied on the main thread, so copy the message
+    // (the data pointer is only valid for the duration of this callback) and
+    // hand it to the event loop.
+    auto msg = new CursorShapeMessage();
+    msg->format = format;
+    msg->name = name != nullptr ? QString::fromLatin1(name) : QString();
+    msg->width = width;
+    msg->height = height;
+    msg->hotX = hotX;
+    msg->hotY = hotY;
+    msg->nominalSize = nominalSize;
+    if (data != nullptr && dataLength != 0) {
+        msg->data = QByteArray((const char*)data, dataLength);
+    }
+
+    SDL_Event cursorShapeEvent = {};
+    cursorShapeEvent.type = SDL_USEREVENT;
+    cursorShapeEvent.user.code = SDL_CODE_SET_CURSOR_SHAPE;
+    cursorShapeEvent.user.data1 = msg;
+    if (SDL_PushEvent(&cursorShapeEvent) <= 0) {
+        delete msg;
+    }
 }
 
 
@@ -680,6 +709,15 @@ bool Session::initialize(QQuickWindow* qtWindow)
 
     m_StreamConfig.fps = m_Preferences->fps;
     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
+
+#ifdef Q_OS_DARWIN
+    // In remote desktop mouse mode, ask the host to send us cursor shapes instead of
+    // compositing the cursor into the video. We draw a native local cursor instead,
+    // which removes stream latency from cursor motion. Hosts without support ignore this.
+    if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame) {
+        m_StreamConfig.localCursor = 1;
+    }
+#endif
 
 #ifndef STEAM_LINK
     // Opt-in to all encryption features if we detect that the platform
@@ -2036,6 +2074,13 @@ void Session::exec()
                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
                                                     (DualSenseOutputReport *)event.user.data2);
                 break;
+            case SDL_CODE_SET_CURSOR_SHAPE:
+            {
+                auto msg = (CursorShapeMessage*)event.user.data1;
+                m_InputHandler->setCursorShape(*msg);
+                delete msg;
+                break;
+            }
             default:
                 SDL_assert(false);
             }

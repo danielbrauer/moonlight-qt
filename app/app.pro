@@ -228,6 +228,7 @@ HEADERS += \
     cli/startstream.h \
     settings/streamingpreferences.h \
     streaming/input/input.h \
+    streaming/input/localcursor.h \
     streaming/session.h \
     streaming/audio/renderers/renderer.h \
     streaming/audio/renderers/sdl.h \
@@ -408,12 +409,16 @@ macx {
     message(VideoToolbox renderer selected)
 
     SOURCES += \
+        streaming/input/localcursor_mac.mm \
         streaming/video/ffmpeg-renderers/vt_base.mm \
         streaming/video/ffmpeg-renderers/vt_avsamplelayer.mm \
         streaming/video/ffmpeg-renderers/vt_metal.mm
 
     HEADERS += \
         streaming/video/ffmpeg-renderers/vt.h
+}
+!macx {
+    SOURCES += streaming/input/localcursor_stub.cpp
 }
 discord-rpc {
     message(Discord integration enabled)

@@ -278,6 +278,36 @@ SdlInputHandler::~SdlInputHandler()
 #endif
 }
 
+int SdlInputHandler::getCapturedCursorVisibility()
+{
+    // While the mouse is captured in absolute mode, show the local cursor if the
+    // user toggled it on or if the host is providing cursor shapes for us to draw.
+    return (m_MouseCursorCapturedVisibilityState == SDL_ENABLE || m_LocalCursor.isActive()) ? SDL_ENABLE : SDL_DISABLE;
+}
+
+void SdlInputHandler::setCursorShape(const CursorShapeMessage& msg)
+{
+    bool wasActive = m_LocalCursor.isActive();
+    bool active = m_LocalCursor.applyShape(msg);
+
+    if (active != wasActive) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "Host cursor shape %s (format %u, name '%s')",
+                    active ? "active" : "hidden",
+                    msg.format,
+                    qPrintable(msg.name));
+    }
+
+    // Update the cursor visibility if we're captured with the pointer over the video
+    if (m_FakeMouseCaptureActive) {
+        int mouseX, mouseY;
+        SDL_GetMouseState(&mouseX, &mouseY);
+        if (isMouseInVideoRegion(mouseX, mouseY)) {
+            SDL_ShowCursor(getCapturedCursorVisibility());
+        }
+    }
+}
+
 void SdlInputHandler::saveCursorVisibilityState()
 {
     if (m_HostUuid.isEmpty()) {
@@ -420,7 +450,9 @@ void SdlInputHandler::setCaptureActive(bool active)
         // If we're in relative mode, try to activate SDL's relative mouse mode
         if (m_AbsoluteMouseMode || SDL_SetRelativeMouseMode(SDL_TRUE) < 0) {
             // Relative mouse mode didn't work or was disabled, so we'll just hide the cursor
-            SDL_ShowCursor(m_MouseCursorCapturedVisibilityState);
+            // (unless the user or the host asked for a visible local cursor)
+            m_LocalCursor.setUseHostShape(true);
+            SDL_ShowCursor(getCapturedCursorVisibility());
             m_FakeMouseCaptureActive = true;
         }
 
@@ -452,7 +484,8 @@ void SdlInputHandler::setCaptureActive(bool active)
     }
     else {
         if (m_FakeMouseCaptureActive) {
-            // Display the cursor again
+            // Display the normal cursor again
+            m_LocalCursor.setUseHostShape(false);
             SDL_ShowCursor(SDL_ENABLE);
             m_FakeMouseCaptureActive = false;
         }

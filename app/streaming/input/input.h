@@ -2,6 +2,7 @@
 
 #include "settings/streamingpreferences.h"
 #include "backend/computermanager.h"
+#include "localcursor.h"
 
 #include "SDL_compat.h"
 
@@ -130,6 +131,8 @@ public:
 
     void setAdaptiveTriggers(uint16_t controllerNumber, DualSenseOutputReport *report);
 
+    void setCursorShape(const CursorShapeMessage& msg);
+
     void handleTouchFingerEvent(SDL_TouchFingerEvent* event);
 
     int getAttachedGamepadMask();
@@ -149,6 +152,8 @@ public:
     void setCaptureActive(bool active);
 
     bool isMouseInVideoRegion(int mouseX, int mouseY, int windowWidth = -1, int windowHeight = -1);
+
+    int getCapturedCursorVisibility();
 
     void updateKeyboardGrabState();
 
@@ -229,6 +234,7 @@ private:
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
     int m_MouseCursorCapturedVisibilityState;
     QString m_HostUuid;
+    LocalCursor m_LocalCursor;
 
     struct {
         KeyCombo keyCombo;
