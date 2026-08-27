@@ -93,14 +93,20 @@ enum class NativeCursorKind {
     ClosedHand,
     Crosshair,
     NotAllowed,
-    ResizeLeftRight,
-    ResizeUpDown,
-    ResizeLeft,
-    ResizeRight,
-    ResizeUp,
-    ResizeDown,
-    ResizeNwSe,
-    ResizeNeSw,
+    ColumnResize,     // divider between columns
+    RowResize,        // divider between rows
+    FrameResizeEW,    // frame edge, both directions
+    FrameResizeNS,
+    FrameResizeE,     // frame edge, one direction
+    FrameResizeW,
+    FrameResizeN,
+    FrameResizeS,
+    FrameResizeNWSE,  // frame corner, both directions
+    FrameResizeNESW,
+    FrameResizeNW,    // frame corner, one direction
+    FrameResizeSE,
+    FrameResizeNE,
+    FrameResizeSW,
     ContextualMenu,
     DragCopy,
     DragLink,
@@ -158,49 +164,51 @@ static const NamedCursorEntry k_NamedCursors[] = {
     { "forbidden", NativeCursorKind::NotAllowed },
     { "dnd-no-drop", NativeCursorKind::NotAllowed },
 
-    { "col-resize", NativeCursorKind::ResizeLeftRight },
-    { "ew-resize", NativeCursorKind::ResizeLeftRight },
-    { "sb_h_double_arrow", NativeCursorKind::ResizeLeftRight },
-    { "h_double_arrow", NativeCursorKind::ResizeLeftRight },
-    { "size_hor", NativeCursorKind::ResizeLeftRight },
-    { "split_h", NativeCursorKind::ResizeLeftRight },
+    // Dividers between columns/rows
+    { "col-resize", NativeCursorKind::ColumnResize },
+    { "split_h", NativeCursorKind::ColumnResize },
+    { "row-resize", NativeCursorKind::RowResize },
+    { "split_v", NativeCursorKind::RowResize },
 
-    { "row-resize", NativeCursorKind::ResizeUpDown },
-    { "ns-resize", NativeCursorKind::ResizeUpDown },
-    { "sb_v_double_arrow", NativeCursorKind::ResizeUpDown },
-    { "v_double_arrow", NativeCursorKind::ResizeUpDown },
-    { "size_ver", NativeCursorKind::ResizeUpDown },
-    { "split_v", NativeCursorKind::ResizeUpDown },
+    // Frame edges, both directions
+    { "ew-resize", NativeCursorKind::FrameResizeEW },
+    { "sb_h_double_arrow", NativeCursorKind::FrameResizeEW },
+    { "h_double_arrow", NativeCursorKind::FrameResizeEW },
+    { "size_hor", NativeCursorKind::FrameResizeEW },
+    { "ns-resize", NativeCursorKind::FrameResizeNS },
+    { "sb_v_double_arrow", NativeCursorKind::FrameResizeNS },
+    { "v_double_arrow", NativeCursorKind::FrameResizeNS },
+    { "size_ver", NativeCursorKind::FrameResizeNS },
 
-    { "e-resize", NativeCursorKind::ResizeRight },
-    { "right_side", NativeCursorKind::ResizeRight },
-    { "right_arrow", NativeCursorKind::ResizeRight },
+    // Frame edges, one direction
+    { "e-resize", NativeCursorKind::FrameResizeE },
+    { "right_side", NativeCursorKind::FrameResizeE },
+    { "right_arrow", NativeCursorKind::FrameResizeE },
+    { "w-resize", NativeCursorKind::FrameResizeW },
+    { "left_side", NativeCursorKind::FrameResizeW },
+    { "left_arrow", NativeCursorKind::FrameResizeW },
+    { "n-resize", NativeCursorKind::FrameResizeN },
+    { "top_side", NativeCursorKind::FrameResizeN },
+    { "up_arrow", NativeCursorKind::FrameResizeN },
+    { "s-resize", NativeCursorKind::FrameResizeS },
+    { "bottom_side", NativeCursorKind::FrameResizeS },
+    { "down_arrow", NativeCursorKind::FrameResizeS },
 
-    { "w-resize", NativeCursorKind::ResizeLeft },
-    { "left_side", NativeCursorKind::ResizeLeft },
-    { "left_arrow", NativeCursorKind::ResizeLeft },
+    // Frame corners, both directions
+    { "nwse-resize", NativeCursorKind::FrameResizeNWSE },
+    { "size_fdiag", NativeCursorKind::FrameResizeNWSE },
+    { "nesw-resize", NativeCursorKind::FrameResizeNESW },
+    { "size_bdiag", NativeCursorKind::FrameResizeNESW },
 
-    { "n-resize", NativeCursorKind::ResizeUp },
-    { "top_side", NativeCursorKind::ResizeUp },
-    { "up_arrow", NativeCursorKind::ResizeUp },
-
-    { "s-resize", NativeCursorKind::ResizeDown },
-    { "bottom_side", NativeCursorKind::ResizeDown },
-    { "down_arrow", NativeCursorKind::ResizeDown },
-
-    { "nwse-resize", NativeCursorKind::ResizeNwSe },
-    { "nw-resize", NativeCursorKind::ResizeNwSe },
-    { "se-resize", NativeCursorKind::ResizeNwSe },
-    { "size_fdiag", NativeCursorKind::ResizeNwSe },
-    { "top_left_corner", NativeCursorKind::ResizeNwSe },
-    { "bottom_right_corner", NativeCursorKind::ResizeNwSe },
-
-    { "nesw-resize", NativeCursorKind::ResizeNeSw },
-    { "ne-resize", NativeCursorKind::ResizeNeSw },
-    { "sw-resize", NativeCursorKind::ResizeNeSw },
-    { "size_bdiag", NativeCursorKind::ResizeNeSw },
-    { "top_right_corner", NativeCursorKind::ResizeNeSw },
-    { "bottom_left_corner", NativeCursorKind::ResizeNeSw },
+    // Frame corners, one direction
+    { "nw-resize", NativeCursorKind::FrameResizeNW },
+    { "top_left_corner", NativeCursorKind::FrameResizeNW },
+    { "se-resize", NativeCursorKind::FrameResizeSE },
+    { "bottom_right_corner", NativeCursorKind::FrameResizeSE },
+    { "ne-resize", NativeCursorKind::FrameResizeNE },
+    { "top_right_corner", NativeCursorKind::FrameResizeNE },
+    { "sw-resize", NativeCursorKind::FrameResizeSW },
+    { "bottom_left_corner", NativeCursorKind::FrameResizeSW },
 
     { "context-menu", NativeCursorKind::ContextualMenu },
 
@@ -238,14 +246,20 @@ static const char* kindName(NativeCursorKind kind)
     case NativeCursorKind::ClosedHand: return "closedHandCursor";
     case NativeCursorKind::Crosshair: return "crosshairCursor";
     case NativeCursorKind::NotAllowed: return "operationNotAllowedCursor";
-    case NativeCursorKind::ResizeLeftRight: return "resizeLeftRightCursor";
-    case NativeCursorKind::ResizeUpDown: return "resizeUpDownCursor";
-    case NativeCursorKind::ResizeLeft: return "resizeLeftCursor";
-    case NativeCursorKind::ResizeRight: return "resizeRightCursor";
-    case NativeCursorKind::ResizeUp: return "resizeUpCursor";
-    case NativeCursorKind::ResizeDown: return "resizeDownCursor";
-    case NativeCursorKind::ResizeNwSe: return "frameResizeCursor(TopLeft, all)";
-    case NativeCursorKind::ResizeNeSw: return "frameResizeCursor(TopRight, all)";
+    case NativeCursorKind::ColumnResize: return "columnResizeCursor(all)";
+    case NativeCursorKind::RowResize: return "rowResizeCursor(all)";
+    case NativeCursorKind::FrameResizeEW: return "frameResizeCursor(Left, all)";
+    case NativeCursorKind::FrameResizeNS: return "frameResizeCursor(Top, all)";
+    case NativeCursorKind::FrameResizeE: return "frameResizeCursor(Right, outward)";
+    case NativeCursorKind::FrameResizeW: return "frameResizeCursor(Left, outward)";
+    case NativeCursorKind::FrameResizeN: return "frameResizeCursor(Top, outward)";
+    case NativeCursorKind::FrameResizeS: return "frameResizeCursor(Bottom, outward)";
+    case NativeCursorKind::FrameResizeNWSE: return "frameResizeCursor(TopLeft, all)";
+    case NativeCursorKind::FrameResizeNESW: return "frameResizeCursor(TopRight, all)";
+    case NativeCursorKind::FrameResizeNW: return "frameResizeCursor(TopLeft, outward)";
+    case NativeCursorKind::FrameResizeSE: return "frameResizeCursor(BottomRight, outward)";
+    case NativeCursorKind::FrameResizeNE: return "frameResizeCursor(TopRight, outward)";
+    case NativeCursorKind::FrameResizeSW: return "frameResizeCursor(BottomLeft, outward)";
     case NativeCursorKind::ContextualMenu: return "contextualMenuCursor";
     case NativeCursorKind::DragCopy: return "dragCopyCursor";
     case NativeCursorKind::DragLink: return "dragLinkCursor";
@@ -462,20 +476,26 @@ private:
         case NativeCursorKind::NotAllowed:
             id = SDL_SYSTEM_CURSOR_NO; name = "SDL_SYSTEM_CURSOR_NO";
             break;
-        case NativeCursorKind::ResizeLeftRight:
-        case NativeCursorKind::ResizeLeft:
-        case NativeCursorKind::ResizeRight:
+        case NativeCursorKind::ColumnResize:
+        case NativeCursorKind::FrameResizeEW:
+        case NativeCursorKind::FrameResizeE:
+        case NativeCursorKind::FrameResizeW:
             id = SDL_SYSTEM_CURSOR_SIZEWE; name = "SDL_SYSTEM_CURSOR_SIZEWE";
             break;
-        case NativeCursorKind::ResizeUpDown:
-        case NativeCursorKind::ResizeUp:
-        case NativeCursorKind::ResizeDown:
+        case NativeCursorKind::RowResize:
+        case NativeCursorKind::FrameResizeNS:
+        case NativeCursorKind::FrameResizeN:
+        case NativeCursorKind::FrameResizeS:
             id = SDL_SYSTEM_CURSOR_SIZENS; name = "SDL_SYSTEM_CURSOR_SIZENS";
             break;
-        case NativeCursorKind::ResizeNwSe:
+        case NativeCursorKind::FrameResizeNWSE:
+        case NativeCursorKind::FrameResizeNW:
+        case NativeCursorKind::FrameResizeSE:
             id = SDL_SYSTEM_CURSOR_SIZENWSE; name = "SDL_SYSTEM_CURSOR_SIZENWSE";
             break;
-        case NativeCursorKind::ResizeNeSw:
+        case NativeCursorKind::FrameResizeNESW:
+        case NativeCursorKind::FrameResizeNE:
+        case NativeCursorKind::FrameResizeSW:
             id = SDL_SYSTEM_CURSOR_SIZENESW; name = "SDL_SYSTEM_CURSOR_SIZENESW";
             break;
         default:
@@ -540,6 +560,20 @@ private:
         resolveKind(NativeCursorKind::Arrow, res);
     }
 
+    // macOS 15+ window-frame resize cursors. The @available guard only exists so
+    // this compiles against the older deployment target; on older macOS the arrow
+    // is shown. The enum types themselves are macOS 15 only, so the availability
+    // warning is silenced for this helper and its callers below.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunguarded-availability-new"
+    static NSCursor* frameResizeCursor(NSCursorFrameResizePosition position, NSCursorFrameResizeDirections directions)
+    {
+        if (@available(macOS 15, *)) {
+            return [NSCursor frameResizeCursorFromPosition:position inDirections:directions];
+        }
+        return [NSCursor arrowCursor];
+    }
+
     static NSCursor* nativeCursorForKind(NativeCursorKind kind)
     {
         switch (kind) {
@@ -557,30 +591,40 @@ private:
             return [NSCursor crosshairCursor];
         case NativeCursorKind::NotAllowed:
             return [NSCursor operationNotAllowedCursor];
-        case NativeCursorKind::ResizeLeftRight:
+        case NativeCursorKind::ColumnResize:
+            if (@available(macOS 15, *)) {
+                return [NSCursor columnResizeCursorInDirections:NSHorizontalDirectionsAll];
+            }
             return [NSCursor resizeLeftRightCursor];
-        case NativeCursorKind::ResizeUpDown:
+        case NativeCursorKind::RowResize:
+            if (@available(macOS 15, *)) {
+                return [NSCursor rowResizeCursorInDirections:NSVerticalDirectionsAll];
+            }
             return [NSCursor resizeUpDownCursor];
-        case NativeCursorKind::ResizeLeft:
-            return [NSCursor resizeLeftCursor];
-        case NativeCursorKind::ResizeRight:
-            return [NSCursor resizeRightCursor];
-        case NativeCursorKind::ResizeUp:
-            return [NSCursor resizeUpCursor];
-        case NativeCursorKind::ResizeDown:
-            return [NSCursor resizeDownCursor];
-        case NativeCursorKind::ResizeNwSe:
-            if (@available(macOS 15, *)) {
-                return [NSCursor frameResizeCursorFromPosition:NSCursorFrameResizePositionTopLeft
-                                                  inDirections:NSCursorFrameResizeDirectionsAll];
-            }
-            return [NSCursor arrowCursor];
-        case NativeCursorKind::ResizeNeSw:
-            if (@available(macOS 15, *)) {
-                return [NSCursor frameResizeCursorFromPosition:NSCursorFrameResizePositionTopRight
-                                                  inDirections:NSCursorFrameResizeDirectionsAll];
-            }
-            return [NSCursor arrowCursor];
+        case NativeCursorKind::FrameResizeEW:
+            return frameResizeCursor(NSCursorFrameResizePositionLeft, NSCursorFrameResizeDirectionsAll);
+        case NativeCursorKind::FrameResizeNS:
+            return frameResizeCursor(NSCursorFrameResizePositionTop, NSCursorFrameResizeDirectionsAll);
+        case NativeCursorKind::FrameResizeE:
+            return frameResizeCursor(NSCursorFrameResizePositionRight, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeW:
+            return frameResizeCursor(NSCursorFrameResizePositionLeft, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeN:
+            return frameResizeCursor(NSCursorFrameResizePositionTop, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeS:
+            return frameResizeCursor(NSCursorFrameResizePositionBottom, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeNWSE:
+            return frameResizeCursor(NSCursorFrameResizePositionTopLeft, NSCursorFrameResizeDirectionsAll);
+        case NativeCursorKind::FrameResizeNESW:
+            return frameResizeCursor(NSCursorFrameResizePositionTopRight, NSCursorFrameResizeDirectionsAll);
+        case NativeCursorKind::FrameResizeNW:
+            return frameResizeCursor(NSCursorFrameResizePositionTopLeft, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeSE:
+            return frameResizeCursor(NSCursorFrameResizePositionBottomRight, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeNE:
+            return frameResizeCursor(NSCursorFrameResizePositionTopRight, NSCursorFrameResizeDirectionsOutward);
+        case NativeCursorKind::FrameResizeSW:
+            return frameResizeCursor(NSCursorFrameResizePositionBottomLeft, NSCursorFrameResizeDirectionsOutward);
         case NativeCursorKind::ContextualMenu:
             return [NSCursor contextualMenuCursor];
         case NativeCursorKind::DragCopy:
@@ -604,6 +648,7 @@ private:
             return [NSCursor arrowCursor];
         }
     }
+#pragma clang diagnostic pop
 
     // The user's Accessibility > Display > Pointer size setting (1.0 - 4.0).
     // System cursors honor this automatically, but custom NSCursors do not,
