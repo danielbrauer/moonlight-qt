@@ -11,16 +11,67 @@
 #include <QtGlobal>
 
 #include <cmath>
+#include <malloc/malloc.h>
+#include <objc/runtime.h>
 
-// Mirror of SDL2's private SDL_Cursor layout (src/events/SDL_mouse_c.h).
-// On macOS, driverdata is a retained NSCursor* that the SDL Cocoa view
-// installs via -resetCursorRects. We create cursors through the public
-// SDL API and swap in our own NSCursor so SDL's focus/show/hide logic
-// keeps working unmodified. The layout has been stable for the life of SDL2.
-struct SDL_Cursor {
-    struct SDL_Cursor* next;
-    void* driverdata;
-};
+// SDL keeps a retained NSCursor* inside its private SDL_Cursor state, which
+// the SDL Cocoa view installs via -resetCursorRects. We create cursors through
+// the public SDL API and swap in our own NSCursor so SDL's focus/show/hide
+// logic keeps working unmodified.
+//
+// The private layout differs between SDL2 (NSCursor* directly in the
+// SDL_Cursor) and SDL3/sdl2-compat (NSCursor* inside a separate driver data
+// block whose layout has changed across SDL3 releases), so rather than
+// hard-code a layout we locate the slot by scanning the malloc blocks for a
+// word whose isa matches NSCursor. If that fails we fall back to SDL's own
+// cursor APIs, which work but are not Retina-aware for raster cursors.
+
+// Exported by libobjc for debuggers; masks the class pointer out of a packed isa
+extern "C" const uintptr_t objc_debug_isa_class_mask;
+
+static bool isNSCursorObject(void* p)
+{
+    if (p == nullptr || malloc_zone_from_ptr(p) == nullptr || malloc_size(p) < sizeof(uintptr_t)) {
+        return false;
+    }
+
+    uintptr_t isa = *(uintptr_t*)p;
+    uintptr_t cls = (uintptr_t)[NSCursor class];
+    return isa == cls || (isa & objc_debug_isa_class_mask) == cls;
+}
+
+// Returns the address of the NSCursor* inside an SDL_Cursor, or nullptr
+static void** findNativeCursorSlot(SDL_Cursor* cursor)
+{
+    if (cursor == nullptr || malloc_zone_from_ptr(cursor) == nullptr) {
+        return nullptr;
+    }
+
+    void** words = (void**)cursor;
+    size_t wordCount = malloc_size(cursor) / sizeof(void*);
+    for (size_t i = 0; i < wordCount && i < 16; i++) {
+        void* p = words[i];
+        if (p == nullptr || malloc_zone_from_ptr(p) == nullptr) {
+            continue;
+        }
+
+        // SDL2: NSCursor directly in the SDL_Cursor
+        if (isNSCursorObject(p)) {
+            return &words[i];
+        }
+
+        // SDL3: NSCursor inside a driver data block
+        void** inner = (void**)p;
+        size_t innerCount = malloc_size(p) / sizeof(void*);
+        for (size_t j = 0; j < innerCount && j < 16; j++) {
+            if (isNSCursorObject(inner[j])) {
+                return &inner[j];
+            }
+        }
+    }
+
+    return nullptr;
+}
 
 // Points per host-nominal-pixel at pointer scale 1.0. Chosen so a 24 px
 // nominal Adwaita arrow ends up roughly the size of NSCursor.arrowCursor.
@@ -175,6 +226,7 @@ public:
     LocalCursorPrivate()
         : m_Active(false),
           m_UseHostShape(true),
+          m_NativeWrappingUnavailable(false),
           m_CurrentCursor(nullptr),
           m_RasterPointerScale(0.0f)
     {
@@ -266,8 +318,12 @@ private:
     // Wraps an NSCursor in an SDL_Cursor so SDL's cursor management can use it.
     // Returns nullptr (and leaves SDL untouched) if SDL's internals don't look
     // the way we expect.
-    static SDL_Cursor* wrapNativeCursor(NSCursor* nsCursor)
+    SDL_Cursor* wrapNativeCursor(NSCursor* nsCursor)
     {
+        if (m_NativeWrappingUnavailable) {
+            return nullptr;
+        }
+
         SDL_Surface* dummySurface = SDL_CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_ARGB8888);
         if (dummySurface == nullptr) {
             return nullptr;
@@ -282,20 +338,67 @@ private:
             return nullptr;
         }
 
-        id sdlNativeCursor = (id)cursor->driverdata;
-        if (![sdlNativeCursor isKindOfClass:[NSCursor class]]) {
+        void** slot = findNativeCursorSlot(cursor);
+        if (slot == nullptr) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                         "SDL_Cursor driverdata is not an NSCursor. Local cursor shapes are unavailable.");
+                         "Unable to locate NSCursor in SDL_Cursor. Falling back to SDL cursors for host cursor shapes.");
             SDL_FreeCursor(cursor);
+            m_NativeWrappingUnavailable = true;
             return nullptr;
         }
 
-        // SDL retained its NSCursor with CFBridgingRetain() and will release it
-        // in SDL_FreeCursor(), so hand it ours with the same ownership.
-        cursor->driverdata = (void*)[nsCursor retain];
+        // SDL holds a +1 reference to its NSCursor and releases it in
+        // SDL_FreeCursor(), so hand it ours with the same ownership.
+        NSCursor* sdlNativeCursor = (NSCursor*)*slot;
+        *slot = (void*)[nsCursor retain];
         [sdlNativeCursor release];
 
         return cursor;
+    }
+
+    // Fallback for when we can't wrap NSCursors: the closest SDL system cursor
+    static SDL_Cursor* createSdlSystemCursor(NativeCursorKind kind)
+    {
+        SDL_SystemCursor id;
+        switch (kind) {
+        case NativeCursorKind::IBeam:
+        case NativeCursorKind::IBeamVertical:
+            id = SDL_SYSTEM_CURSOR_IBEAM;
+            break;
+        case NativeCursorKind::PointingHand:
+            id = SDL_SYSTEM_CURSOR_HAND;
+            break;
+        case NativeCursorKind::OpenHand:
+        case NativeCursorKind::ClosedHand:
+            id = SDL_SYSTEM_CURSOR_SIZEALL;
+            break;
+        case NativeCursorKind::Crosshair:
+            id = SDL_SYSTEM_CURSOR_CROSSHAIR;
+            break;
+        case NativeCursorKind::NotAllowed:
+            id = SDL_SYSTEM_CURSOR_NO;
+            break;
+        case NativeCursorKind::ResizeLeftRight:
+        case NativeCursorKind::ResizeLeft:
+        case NativeCursorKind::ResizeRight:
+            id = SDL_SYSTEM_CURSOR_SIZEWE;
+            break;
+        case NativeCursorKind::ResizeUpDown:
+        case NativeCursorKind::ResizeUp:
+        case NativeCursorKind::ResizeDown:
+            id = SDL_SYSTEM_CURSOR_SIZENS;
+            break;
+        case NativeCursorKind::ResizeNwSe:
+            id = SDL_SYSTEM_CURSOR_SIZENWSE;
+            break;
+        case NativeCursorKind::ResizeNeSw:
+            id = SDL_SYSTEM_CURSOR_SIZENESW;
+            break;
+        default:
+            id = SDL_SYSTEM_CURSOR_ARROW;
+            break;
+        }
+        return SDL_CreateSystemCursor(id);
     }
 
     SDL_Cursor* cursorForKind(NativeCursorKind kind)
@@ -311,6 +414,9 @@ private:
 
         NSCursor* nsCursor = nativeCursorForKind(kind);
         SDL_Cursor* cursor = wrapNativeCursor(nsCursor);
+        if (cursor == nullptr) {
+            cursor = createSdlSystemCursor(kind);
+        }
         if (cursor != nullptr) {
             m_NamedCursors.insert((int)kind, cursor);
         }
@@ -448,16 +554,86 @@ private:
             return it.value();
         }
 
-        NSCursor* nsCursor = createRasterCursor(msg, pointerScale);
-        if (nsCursor == nil) {
-            return nullptr;
+        SDL_Cursor* cursor = nullptr;
+        if (!m_NativeWrappingUnavailable) {
+            NSCursor* nsCursor = createRasterCursor(msg, pointerScale);
+            if (nsCursor != nil) {
+                cursor = wrapNativeCursor(nsCursor);
+                [nsCursor release];
+            }
         }
-
-        SDL_Cursor* cursor = wrapNativeCursor(nsCursor);
-        [nsCursor release];
+        if (cursor == nullptr) {
+            cursor = createSdlRasterCursor(msg, pointerScale);
+        }
         if (cursor != nullptr) {
             m_RasterCursors.insert(key, cursor);
         }
+        return cursor;
+    }
+
+    // Computes the point size a host raster should be displayed at. The raster
+    // represents a nominalSize-pixel box on the host regardless of its actual
+    // resolution (hosts send the largest size they have).
+    static void getTargetPointSize(const CursorShapeMessage& msg, float pointerScale, CGFloat* targetWidth, CGFloat* targetHeight)
+    {
+        float nominalSize = msg.nominalSize != 0 ? msg.nominalSize : msg.width;
+        *targetWidth = nominalSize * getPointsPerNominalPixel() * pointerScale;
+        *targetHeight = *targetWidth * msg.height / msg.width;
+    }
+
+    static CGImageRef createSourceImage(const CursorShapeMessage& msg, CGColorSpaceRef colorSpace)
+    {
+        CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, msg.data.constData(), msg.data.size(), nullptr);
+        CGImageRef sourceImage = CGImageCreate(msg.width, msg.height, 8, 32, msg.width * 4, colorSpace,
+                                               kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+                                               provider, nullptr, true, kCGRenderingIntentDefault);
+        CGDataProviderRelease(provider);
+        return sourceImage;
+    }
+
+    // Scales the source image into a new premultiplied BGRA bitmap context
+    static CGContextRef createScaledBitmap(CGImageRef sourceImage, CGColorSpaceRef colorSpace, size_t pixelWidth, size_t pixelHeight)
+    {
+        CGContextRef context = CGBitmapContextCreate(nullptr, pixelWidth, pixelHeight, 8, 0, colorSpace,
+                                                     kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        if (context != nullptr) {
+            CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+            CGContextDrawImage(context, CGRectMake(0, 0, pixelWidth, pixelHeight), sourceImage);
+        }
+        return context;
+    }
+
+    // Fallback for when we can't wrap NSCursors: a 1x SDL color cursor
+    static SDL_Cursor* createSdlRasterCursor(const CursorShapeMessage& msg, float pointerScale)
+    {
+        CGFloat targetWidth, targetHeight;
+        getTargetPointSize(msg, pointerScale, &targetWidth, &targetHeight);
+        size_t pixelWidth = (size_t)std::ceil(targetWidth);
+        size_t pixelHeight = (size_t)std::ceil(targetHeight);
+
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+        CGImageRef sourceImage = createSourceImage(msg, colorSpace);
+        CGContextRef context = sourceImage != nullptr ? createScaledBitmap(sourceImage, colorSpace, pixelWidth, pixelHeight) : nullptr;
+        SDL_Cursor* cursor = nullptr;
+
+        if (context != nullptr) {
+            SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(CGBitmapContextGetData(context),
+                                                                      (int)pixelWidth, (int)pixelHeight, 32,
+                                                                      (int)CGBitmapContextGetBytesPerRow(context),
+                                                                      SDL_PIXELFORMAT_ARGB8888);
+            if (surface != nullptr) {
+                cursor = SDL_CreateColorCursor(surface,
+                                               (int)(msg.hotX * targetWidth / msg.width),
+                                               (int)(msg.hotY * targetHeight / msg.height));
+                SDL_FreeSurface(surface);
+            }
+            CGContextRelease(context);
+        }
+
+        if (sourceImage != nullptr) {
+            CGImageRelease(sourceImage);
+        }
+        CGColorSpaceRelease(colorSpace);
         return cursor;
     }
 
@@ -466,19 +642,12 @@ private:
     // cursor at the user's pointer size. Returns a +1 retained cursor.
     static NSCursor* createRasterCursor(const CursorShapeMessage& msg, float pointerScale)
     {
-        // The raster represents a nominalSize-pixel box on the host regardless
-        // of its actual resolution (hosts send the largest size they have).
-        float nominalSize = msg.nominalSize != 0 ? msg.nominalSize : msg.width;
-        CGFloat targetWidth = nominalSize * getPointsPerNominalPixel() * pointerScale;
-        CGFloat targetHeight = targetWidth * msg.height / msg.width;
+        CGFloat targetWidth, targetHeight;
+        getTargetPointSize(msg, pointerScale, &targetWidth, &targetHeight);
         CGFloat scaleToPoints = targetWidth / msg.width;
 
         CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-        CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, msg.data.constData(), msg.data.size(), nullptr);
-        CGImageRef sourceImage = CGImageCreate(msg.width, msg.height, 8, 32, msg.width * 4, colorSpace,
-                                               kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
-                                               provider, nullptr, true, kCGRenderingIntentDefault);
-        CGDataProviderRelease(provider);
+        CGImageRef sourceImage = createSourceImage(msg, colorSpace);
         if (sourceImage == nullptr) {
             CGColorSpaceRelease(colorSpace);
             return nil;
@@ -499,14 +668,10 @@ private:
             size_t pixelWidth = (size_t)std::ceil(targetWidth * backingScale);
             size_t pixelHeight = (size_t)std::ceil(targetHeight * backingScale);
 
-            CGContextRef context = CGBitmapContextCreate(nullptr, pixelWidth, pixelHeight, 8, 0, colorSpace,
-                                                         kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+            CGContextRef context = createScaledBitmap(sourceImage, colorSpace, pixelWidth, pixelHeight);
             if (context == nullptr) {
                 continue;
             }
-
-            CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
-            CGContextDrawImage(context, CGRectMake(0, 0, pixelWidth, pixelHeight), sourceImage);
 
             CGImageRef scaledImage = CGBitmapContextCreateImage(context);
             CGContextRelease(context);
@@ -535,6 +700,7 @@ private:
 
     bool m_Active;
     bool m_UseHostShape;
+    bool m_NativeWrappingUnavailable;
     SDL_Cursor* m_CurrentCursor;
     float m_RasterPointerScale;
     QHash<int, SDL_Cursor*> m_NamedCursors;
