@@ -1007,9 +1007,8 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
 #endif
 #ifdef Q_OS_DARWIN
         case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
-            // Prefer the libplacebo (on MoltenVK) renderer unless explicitly opted out
 #ifdef HAVE_LIBPLACEBO_VULKAN
-            if (params->renderer == StreamingPreferences::RS_AUTO || params->renderer == StreamingPreferences::RS_VULKAN) {
+            if (params->renderer == StreamingPreferences::RS_VULKAN) {
                 return new PlVkRenderer(hwDecodeCfg->device_type);
             }
 #endif
@@ -1017,7 +1016,9 @@ IFFmpegRenderer* FFmpegVideoDecoder::createHwAccelRenderer(const AVCodecHWConfig
                 return VTRendererFactory::createRenderer();
             }
             else {
-                // This covers both Metal explicitly selected and probe-only (since Metal is cheap to instantiate)
+                // Prefer the native Metal renderer by default. On Apple Silicon with
+                // macOS 14+, it paces presentation with CAMetalDisplayLink.
+                // This also covers probe-only (since Metal is cheap to instantiate).
                 return VTMetalRendererFactory::createRenderer(true);
             }
 #endif
