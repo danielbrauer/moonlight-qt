@@ -3,11 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>GCSupportsGameMode</key>
-	<true/>
+	<false/>
 	<key>CFBundleExecutable</key>
 	<string>Moonlight</string>
-	<key>LSSupportsGameMode</key>
-	<true/>
 	<key>CFBundleGetInfoString</key>
 	<string>Stream games and other applications from another PC</string>
 	<key>CFBundleIconFile</key>
