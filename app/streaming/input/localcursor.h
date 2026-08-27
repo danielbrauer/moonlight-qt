@@ -39,6 +39,11 @@ public:
     // Returns true if a host cursor shape is currently active
     bool isActive() const;
 
+    // Sets the scale at which host pixels are displayed on screen (points per
+    // host pixel), so raster cursors can be shown at the size they would have
+    // had if the host had composited them into the video.
+    void setVideoScale(double pointsPerHostPixel);
+
     // Selects the host-provided shape (true) or the system default cursor
     // (false) as the current SDL cursor. This is used to show the normal
     // cursor when the pointer is outside the video region.

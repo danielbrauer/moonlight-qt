@@ -4,6 +4,7 @@
 #include "settings/mappingmanager.h"
 #include "path.h"
 #include "utils.h"
+#include "streaming/streamutils.h"
 
 #include <QtGlobal>
 #include <QDir>
@@ -287,6 +288,24 @@ int SdlInputHandler::getCapturedCursorVisibility()
 
 void SdlInputHandler::setCursorShape(const CursorShapeMessage& msg)
 {
+    // Tell the local cursor how large host pixels are on screen so raster
+    // cursors match the size they would have had inside the video.
+    if (m_Window != nullptr && m_StreamWidth > 0) {
+        int windowWidth, windowHeight;
+        SDL_GetWindowSize(m_Window, &windowWidth, &windowHeight);
+
+        SDL_Rect src, dst;
+        src.x = src.y = 0;
+        src.w = m_StreamWidth;
+        src.h = m_StreamHeight;
+        dst.x = dst.y = 0;
+        dst.w = windowWidth;
+        dst.h = windowHeight;
+        StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
+        m_LocalCursor.setVideoScale((double)dst.w / m_StreamWidth);
+    }
+
     bool wasActive = m_LocalCursor.isActive();
     bool active = m_LocalCursor.applyShape(msg);
 

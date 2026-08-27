@@ -28,3 +28,7 @@ bool LocalCursor::isActive() const
 void LocalCursor::setUseHostShape(bool)
 {
 }
+
+void LocalCursor::setVideoScale(double)
+{
+}

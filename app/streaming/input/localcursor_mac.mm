@@ -78,10 +78,9 @@ static void** findNativeCursorSlot(SDL_Cursor* cursor)
     return nullptr;
 }
 
-// Points per host-nominal-pixel at pointer scale 1.0. Chosen so a 24 px
-// nominal Adwaita arrow ends up roughly the size of NSCursor.arrowCursor.
-// Override with LOCAL_CURSOR_SCALE for tuning by eye.
-#define DEFAULT_POINTS_PER_NOMINAL_PIXEL (4.0f / 3.0f)
+// Extra multiplier applied to raster cursors on top of the video scale and
+// the pointer size, for tuning by eye. Override with LOCAL_CURSOR_SCALE.
+#define DEFAULT_RASTER_CURSOR_TUNING 1.0f
 
 enum class NativeCursorKind {
     Hidden,
@@ -288,6 +287,7 @@ struct CursorReportEntry {
     CGFloat targetWidth = 0;
     CGFloat targetHeight = 0;
     float pointerScale = 1.0f;
+    double videoScale = 1.0;
     int count = 0;
     qint64 firstSeenMs = 0;
 };
@@ -301,6 +301,7 @@ public:
           m_NativeWrappingUnavailable(false),
           m_CurrentCursor(nullptr),
           m_RasterPointerScale(0.0f),
+          m_VideoScale(1.0),
           m_SessionStartMs(QDateTime::currentMSecsSinceEpoch())
     {
     }
@@ -373,6 +374,13 @@ public:
         if (m_UseHostShape != useHostShape) {
             m_UseHostShape = useHostShape;
             updateSdlCursor();
+        }
+    }
+
+    void setVideoScale(double pointsPerHostPixel)
+    {
+        if (pointsPerHostPixel > 0.0) {
+            m_VideoScale = pointsPerHostPixel;
         }
     }
 
@@ -622,19 +630,21 @@ private:
         return scale;
     }
 
-    static float getPointsPerNominalPixel()
+    static float getRasterTuning()
     {
         bool ok = false;
         float value = qEnvironmentVariable("LOCAL_CURSOR_SCALE").toFloat(&ok);
         if (ok && value > 0.0f && value <= 8.0f) {
             return value;
         }
-        return DEFAULT_POINTS_PER_NOMINAL_PIXEL;
+        return DEFAULT_RASTER_CURSOR_TUNING;
     }
 
-    static QByteArray rasterCacheKey(const CursorShapeMessage& msg)
+    QByteArray rasterCacheKey(const CursorShapeMessage& msg) const
     {
         QByteArray key;
+        float videoScale = (float)m_VideoScale;
+        key.append((const char*)&videoScale, sizeof(videoScale));
         key.append((const char*)&msg.width, sizeof(msg.width));
         key.append((const char*)&msg.height, sizeof(msg.height));
         key.append((const char*)&msg.hotX, sizeof(msg.hotX));
@@ -661,7 +671,7 @@ private:
             m_RasterPointerScale = pointerScale;
         }
 
-        getTargetPointSize(msg, pointerScale, &res.targetWidth, &res.targetHeight);
+        getTargetPointSize(msg, m_VideoScale, &res.targetWidth, &res.targetHeight);
 
         QByteArray key = rasterCacheKey(msg);
         auto it = m_RasterCursors.find(key);
@@ -673,7 +683,7 @@ private:
 
         SDL_Cursor* cursor = nullptr;
         if (!m_NativeWrappingUnavailable) {
-            NSCursor* nsCursor = createRasterCursor(msg, pointerScale);
+            NSCursor* nsCursor = createRasterCursor(msg, pointerScale, m_VideoScale);
             if (nsCursor != nil) {
                 cursor = wrapNativeCursor(nsCursor);
                 if (cursor != nullptr) {
@@ -686,7 +696,7 @@ private:
             }
         }
         if (cursor == nullptr) {
-            cursor = createSdlRasterCursor(msg, pointerScale);
+            cursor = createSdlRasterCursor(msg, m_VideoScale);
             res.mechanism = "SDL color cursor fallback (1x)";
         }
         if (cursor != nullptr) {
@@ -696,13 +706,19 @@ private:
         res.cursor = cursor;
     }
 
-    // Computes the point size a host raster should be displayed at. The raster
-    // represents a nominalSize-pixel box on the host regardless of its actual
-    // resolution (hosts send the largest size they have).
-    static void getTargetPointSize(const CursorShapeMessage& msg, float pointerScale, CGFloat* targetWidth, CGFloat* targetHeight)
+    // Computes the point size a host raster should be displayed at: the size it
+    // would have had if the host had composited it into the video (nominal host
+    // pixels scaled like the video). The raster represents a nominalSize-pixel
+    // box on the host regardless of its actual resolution (hosts send the
+    // largest size they have).
+    //
+    // The user's Accessibility pointer size is NOT applied here: the window
+    // server scales custom cursors by it at display time (verified on macOS 26),
+    // just like the system cursors.
+    static void getTargetPointSize(const CursorShapeMessage& msg, double videoScale, CGFloat* targetWidth, CGFloat* targetHeight)
     {
         float nominalSize = msg.nominalSize != 0 ? msg.nominalSize : msg.width;
-        *targetWidth = nominalSize * getPointsPerNominalPixel() * pointerScale;
+        *targetWidth = nominalSize * videoScale * getRasterTuning();
         *targetHeight = *targetWidth * msg.height / msg.width;
     }
 
@@ -729,10 +745,10 @@ private:
     }
 
     // Fallback for when we can't wrap NSCursors: a 1x SDL color cursor
-    static SDL_Cursor* createSdlRasterCursor(const CursorShapeMessage& msg, float pointerScale)
+    static SDL_Cursor* createSdlRasterCursor(const CursorShapeMessage& msg, double videoScale)
     {
         CGFloat targetWidth, targetHeight;
-        getTargetPointSize(msg, pointerScale, &targetWidth, &targetHeight);
+        getTargetPointSize(msg, videoScale, &targetWidth, &targetHeight);
         size_t pixelWidth = (size_t)std::ceil(targetWidth);
         size_t pixelHeight = (size_t)std::ceil(targetHeight);
 
@@ -762,13 +778,18 @@ private:
         return cursor;
     }
 
-    // Builds a Retina-aware NSCursor from a premultiplied BGRA raster, scaled
-    // so the cursor's nominal box maps to the same point size as a system
-    // cursor at the user's pointer size. Returns a +1 retained cursor.
-    static NSCursor* createRasterCursor(const CursorShapeMessage& msg, float pointerScale)
+    // Builds a Retina-aware NSCursor from a premultiplied BGRA raster at the
+    // point size the host cursor would have had in the video. Returns a +1
+    // retained cursor.
+    //
+    // The window server enlarges the cursor by the Accessibility pointer size
+    // when displaying it, so each representation is rendered with enough pixels
+    // for that final size (backing scale x pointer size) to avoid a second,
+    // lossy upscale of an already-downscaled image.
+    static NSCursor* createRasterCursor(const CursorShapeMessage& msg, float pointerScale, double videoScale)
     {
         CGFloat targetWidth, targetHeight;
-        getTargetPointSize(msg, pointerScale, &targetWidth, &targetHeight);
+        getTargetPointSize(msg, videoScale, &targetWidth, &targetHeight);
         CGFloat scaleToPoints = targetWidth / msg.width;
 
         CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
@@ -790,8 +811,8 @@ private:
 
         NSImage* image = [[[NSImage alloc] initWithSize:NSMakeSize(targetWidth, targetHeight)] autorelease];
         for (int backingScale : std::as_const(backingScales)) {
-            size_t pixelWidth = (size_t)std::ceil(targetWidth * backingScale);
-            size_t pixelHeight = (size_t)std::ceil(targetHeight * backingScale);
+            size_t pixelWidth = (size_t)std::ceil(targetWidth * backingScale * pointerScale);
+            size_t pixelHeight = (size_t)std::ceil(targetHeight * backingScale * pointerScale);
 
             CGContextRef context = createScaledBitmap(sourceImage, colorSpace, pixelWidth, pixelHeight);
             if (context == nullptr) {
@@ -825,7 +846,7 @@ private:
 
     // ---- Debug report -----------------------------------------------------
 
-    static QByteArray reportKey(const CursorShapeMessage& msg)
+    QByteArray reportKey(const CursorShapeMessage& msg) const
     {
         QByteArray key;
         key.append((char)msg.format);
@@ -911,6 +932,7 @@ private:
         entry.targetWidth = res.targetWidth;
         entry.targetHeight = res.targetHeight;
         entry.pointerScale = m_RasterPointerScale != 0.0f ? m_RasterPointerScale : getPointerScale();
+        entry.videoScale = m_VideoScale;
         entry.hostPng = pngFromHostRaster(msg);
         if (res.nsCursor != nil) {
             entry.macPng = pngFromNSImage(res.nsCursor.image);
@@ -971,12 +993,12 @@ private:
                 "</style></head><body>\n";
         html += "<h1>Moonlight cursor shapes</h1>\n";
         html += QString("<div class=\"meta\">%1 &middot; %2 distinct shape%3 &middot; pointer scale %4 &middot; "
-                        "points per nominal px %5 &middot; SDL %6.%7.%8%9</div>\n")
+                        "raster tuning %5 &middot; SDL %6.%7.%8%9</div>\n")
                 .arg(htmlEscape(QDateTime::currentDateTime().toString(Qt::ISODate)))
                 .arg(m_Report.size())
                 .arg(m_Report.size() == 1 ? "" : "s")
                 .arg(getPointerScale())
-                .arg(getPointsPerNominalPixel())
+                .arg(getRasterTuning())
                 .arg(sdlVersion.major).arg(sdlVersion.minor).arg(sdlVersion.patch)
                 .arg(m_NativeWrappingUnavailable ? " &middot; <span class=\"note\">NSCursor wrapping unavailable; SDL fallbacks in use</span>" : "");
 
@@ -1004,8 +1026,9 @@ private:
                 macDetails += htmlEscape(e.mechanism);
             }
             if (e.targetWidth > 0) {
-                macDetails += QString("<br>displayed at %1&times;%2 pt (pointer scale %3)")
-                        .arg(e.targetWidth, 0, 'f', 1).arg(e.targetHeight, 0, 'f', 1).arg(e.pointerScale);
+                macDetails += QString("<br>image %1&times;%2 pt before the system's pointer scaling (video scale %3, pointer scale %4)")
+                        .arg(e.targetWidth, 0, 'f', 1).arg(e.targetHeight, 0, 'f', 1)
+                        .arg(e.videoScale, 0, 'f', 3).arg(e.pointerScale);
             }
             if (!e.macPng.isEmpty()) {
                 macDetails += QString("<br><span class=\"small\">image %1&times;%2 pt, hotspot (%3,%4)</span>")
@@ -1059,6 +1082,7 @@ private:
     bool m_NativeWrappingUnavailable;
     SDL_Cursor* m_CurrentCursor;
     float m_RasterPointerScale;
+    double m_VideoScale;
     QHash<int, SDL_Cursor*> m_NamedCursors;
     QHash<int, QString> m_NamedCursorMechanisms;
     QHash<QByteArray, SDL_Cursor*> m_RasterCursors;
@@ -1093,3 +1117,8 @@ void LocalCursor::setUseHostShape(bool useHostShape)
 { @autoreleasepool {
     m_Private->setUseHostShape(useHostShape);
 }}
+
+void LocalCursor::setVideoScale(double pointsPerHostPixel)
+{
+    m_Private->setVideoScale(pointsPerHostPixel);
+}
